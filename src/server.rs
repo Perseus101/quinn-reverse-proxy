@@ -1,21 +1,25 @@
-use std::{ascii, str};
 use std::net::SocketAddr;
+use std::{ascii, rc::Rc, str};
 
+use futures::{future::err, Future, Stream};
 use tokio::runtime::current_thread::Runtime;
-use futures::{Future, Stream, future::err};
 
 use quinn::ServerConfig;
 
-use httparse::Request;
-
 use slog::Logger;
 
-use crate::error::{Result, ErrorExt, ProxyError};
+use crate::error::{ErrorExt, ProxyError, Result};
+use crate::upstream::Upstream;
 
-pub(crate) type FutureResponse = Box<dyn Future<Item=Vec<u8>, Error=failure::Error>>;
-pub(crate) type RequestCallback = &'static Fn(Request) -> FutureResponse;
+pub(crate) type FutureResponse = Box<dyn Future<Item = Vec<u8>, Error = failure::Error>>;
 
-pub(crate) fn serve(process_request: RequestCallback, log: Logger, server_config: ServerConfig, listen: SocketAddr) -> Result<()> {
+pub(crate) fn serve(
+    upstream: Upstream,
+    log: Logger,
+    server_config: ServerConfig,
+    listen: SocketAddr,
+) -> Result<()> {
+    let upstream = Rc::new(upstream);
     let mut endpoint = quinn::Endpoint::builder();
     endpoint.logger(log.clone());
     endpoint.listen(server_config);
@@ -28,7 +32,7 @@ pub(crate) fn serve(process_request: RequestCallback, log: Logger, server_config
 
     let mut runtime = Runtime::new()?;
     runtime.spawn(incoming.for_each(move |conn| {
-        handle_connection(process_request, log.clone(), conn);
+        handle_connection(upstream.clone(), log.clone(), conn);
         Ok(())
     }));
     runtime.block_on(endpoint_driver)?;
@@ -37,7 +41,7 @@ pub(crate) fn serve(process_request: RequestCallback, log: Logger, server_config
 }
 
 fn handle_connection(
-    process_request: RequestCallback,
+    upstream: Rc<Upstream>,
     log: Logger,
     conn: (
         quinn::ConnectionDriver,
@@ -62,13 +66,13 @@ fn handle_connection(
                 move |e| info!(log, "connection terminated"; "reason" => %e)
             })
             .for_each(move |stream| {
-                handle_request(process_request, &log, stream);
+                handle_request(upstream.clone(), &log, stream);
                 Ok(())
             }),
     );
 }
 
-fn handle_request(process_request: RequestCallback, log: &Logger, stream: quinn::NewStream) {
+fn handle_request(upstream: Rc<Upstream>, log: &Logger, stream: quinn::NewStream) {
     let log = log.clone();
     let local_log = log.clone();
     let (send, recv) = match stream {
@@ -92,7 +96,7 @@ fn handle_request(process_request: RequestCallback, log: &Logger, stream: quinn:
                 if let Err(_e) = parsed.parse(&req) {
                     return Box::new(err(ProxyError::InvalidRequest.into())) as FutureResponse;
                 }
-                process_request(parsed)
+                upstream.process_request(parsed)
             })
             .and_then(move |resp| {
                 // Write the response

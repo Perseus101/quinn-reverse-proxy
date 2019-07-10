@@ -3,42 +3,55 @@ extern crate failure;
 #[macro_use]
 extern crate slog;
 
+use std::fs;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::fs;
 
 use failure::ResultExt;
 use slog::{Drain, Logger};
 use structopt::{self, StructOpt};
 
-use httparse::Request;
-use hyper::{Body, Request as HyperRequest};
-use futures::{Future, Stream, future::err};
-
 mod error;
 mod server;
+mod upstream;
 
-use server::FutureResponse;
-
-use error::{ErrorExt, Result, ProxyError};
+use error::{ErrorExt, Result};
 
 #[derive(StructOpt, Debug)]
 #[structopt(name = "server")]
 struct Opt {
-    /// TLS private key in PEM format
-    #[structopt(parse(from_os_str), short = "k", long = "key", requires = "cert", default_value = "/opt/configs/key")]
+    /// TLS private key
+    #[structopt(
+        parse(from_os_str),
+        short = "k",
+        long = "key",
+        requires = "cert",
+        default_value = "certs/key.der"
+    )]
     key: PathBuf,
-    /// TLS certificate in PEM format
-    #[structopt(parse(from_os_str), short = "c", long = "cert", requires = "key", default_value = "/opt/configs/cert")]
+    /// TLS certificate
+    #[structopt(
+        parse(from_os_str),
+        short = "c",
+        long = "cert",
+        requires = "key",
+        default_value = "certs/cert.der"
+    )]
     cert: PathBuf,
     /// Enable stateless retries
     #[structopt(long = "stateless-retry")]
     stateless_retry: bool,
     /// Address to listen on
-    #[structopt(long = "listen", default_value = "127.0.0.1:5001")]
+    #[structopt(long = "listen", default_value = "0.0.0.0:80")]
     listen: SocketAddr,
-
+    /// Address to reverse proxy to
+    #[structopt(
+        short = "u",
+        long = "upstream",
+        default_value = "http://localhost:5000"
+    )]
+    upstream: String,
 }
 
 fn main() {
@@ -90,42 +103,10 @@ fn run(log: Logger, options: Opt) -> Result<()> {
         quinn::CertificateChain::from_pem(&cert_chain)?
     };
     server_config.certificate(cert_chain, key)?;
-    server::serve(&process_request_wrapper, log.clone(), server_config.build(), options.listen)
-}
-
-fn process_request_wrapper(request: Request) -> FutureResponse {
-    let outgoing = match process_response(request) {
-        Ok(outgoing) => outgoing,
-        Err(e) => return Box::new(err(e)),
-    };
-    let client = hyper::Client::new();
-    let future = client.request(outgoing)
-        .and_then(|resp| {
-            // Once the request to the upstream server is complete
-            // convert the body into bytes to send as a response
-            resp.map(|body| {
-                body.concat2()
-                    .map(|chunk| {
-                        chunk.to_vec()
-                    })
-            }).into_body()
-        })
-        .map_err(|e| {
-            println!("Body parsing error: {}", e);
-            ProxyError::RequestFailure.into()
-        });
-    Box::new(future)
-}
-
-fn process_response(request: Request) -> Result<HyperRequest<hyper::Body>> {
-    let path = request.path.ok_or(ProxyError::InvalidRequest)?;
-    let url = format!("http://localhost:5000{}", path);
-    let method = String::from(request.method.ok_or(ProxyError::InvalidRequest)?);
-
-
-    HyperRequest::builder()
-        .method(method.as_bytes())
-        .uri(url)
-        .body(Body::from("Test body"))
-        .map_err(|err| err.into())
+    server::serve(
+        upstream::Upstream::new(options.upstream)?,
+        log.clone(),
+        server_config.build(),
+        options.listen,
+    )
 }
