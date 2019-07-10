@@ -1,0 +1,24 @@
+[package]
+name = "quinn-reverse-proxy"
+version = "0.1.0"
+authors = ["Colin Moore <camoore7@ncsu.edu>"]
+edition = "2018"
+
+[dependencies]
+quinn = "0.3.0"
+httparse = "1.3.4"
+hyper = "0.12.32"
+futures = "0.1.21"
+rand = "0.7"
+slog = "2.1"
+slog-term = "2.4"
+tokio = "0.1.6"
+tokio-current-thread = "0.1"
+failure = "0.1"
+structopt = "0.2.7"
+rcgen = "0.2"
+directories = "1.0.2"
+
+[[bin]]
+name="generate-cert"
+path="src/bin/generate_cert.rs"
