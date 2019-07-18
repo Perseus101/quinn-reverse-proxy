@@ -7,5 +7,6 @@ RUN cargo fetch
 
 COPY . .
 RUN cargo install --path .
+EXPOSE 80
 
 ENTRYPOINT ["quinn-reverse-proxy"]
