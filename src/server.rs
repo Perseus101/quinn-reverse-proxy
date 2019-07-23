@@ -1,5 +1,5 @@
 use std::net::SocketAddr;
-use std::{ascii, rc::Rc, str};
+use std::rc::Rc;
 
 use futures::{future::err, Future, Stream};
 use tokio::runtime::current_thread::Runtime;
@@ -84,19 +84,23 @@ fn handle_request(upstream: Rc<Upstream>, log: &Logger, stream: quinn::NewStream
         recv.read_to_end(64 * 1024) // Read the request, which must be at most 64KiB
             .map_err(|e| format_err!("failed reading request: {}", e))
             .and_then(move |(_, req)| {
-                let mut escaped = String::new();
-                for &x in &req[..] {
-                    let part = ascii::escape_default(x).collect::<Vec<_>>();
-                    escaped.push_str(str::from_utf8(&part).unwrap());
-                }
-                info!(log, "got request"; "content" => escaped);
+                info!(log, "got request"; "len" => req.len());
                 // Execute the request
                 let mut headers = [httparse::EMPTY_HEADER; 16];
                 let mut parsed = httparse::Request::new(&mut headers);
-                if let Err(_e) = parsed.parse(&req) {
-                    return Box::new(err(ProxyError::InvalidRequest.into())) as FutureResponse;
-                }
-                upstream.process_request(parsed)
+                let len = match parsed.parse(&req) {
+                    Err(e) => {
+                        debug!(log, "parsing request failed"; "error" => format!("{:?}", e));
+                        return Box::new(err(ProxyError::InvalidRequest.into())) as FutureResponse;
+                    },
+                    Ok(httparse::Status::Partial) => {
+                        debug!(log, "incomplete request");
+                        return Box::new(err(ProxyError::InvalidRequest.into())) as FutureResponse;
+                    },
+                    Ok(httparse::Status::Complete(len)) => len,
+                };
+                let body = &req[len..];
+                upstream.process_request(parsed, body)
             })
             .and_then(move |resp| {
                 // Write the response

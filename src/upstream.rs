@@ -21,8 +21,8 @@ impl Upstream {
         Ok(Upstream { client, uri })
     }
 
-    pub fn process_request(&self, request: Request) -> FutureResponse {
-        let outgoing = match self.build_upstream_request(request) {
+    pub fn process_request<'a>(&self, request: Request, body: &'a [u8]) -> FutureResponse {
+        let outgoing = match self.build_upstream_request(request, body) {
             Ok(outgoing) => outgoing,
             Err(e) => return Box::new(err(e)),
         };
@@ -43,7 +43,7 @@ impl Upstream {
     }
 
     /// Builds a request to the upstream server based on the incoming request
-    fn build_upstream_request(&self, request: Request) -> Result<HyperRequest<hyper::Body>> {
+    fn build_upstream_request<'a>(&self, request: Request, body: &'a [u8]) -> Result<HyperRequest<hyper::Body>> {
         let path = request.path.ok_or(ProxyError::InvalidRequest)?;
         let uri = format!("{}{}", self.uri, path);
         let method = String::from(request.method.ok_or(ProxyError::InvalidRequest)?);
@@ -51,7 +51,7 @@ impl Upstream {
         HyperRequest::builder()
             .method(method.as_bytes())
             .uri(uri)
-            .body(Body::empty())
+            .body(Body::from(body.to_vec()))
             .map_err(|err| err.into())
     }
 }
