@@ -1,11 +1,16 @@
-use futures::{future::err, Future, Stream};
 use httparse::Request;
 use hyper::client::connect::HttpConnector;
-use hyper::{Body, Client, Request as HyperRequest, Uri};
+use hyper::{body::HttpBody as _, Body, Client, Request as HyperRequest, Uri};
 use hyper_tls::HttpsConnector;
+use bytebuffer::ByteBuffer;
+use async_trait::async_trait;
 
 use crate::error::{ProxyError, Result};
-use crate::server::FutureResponse;
+
+#[async_trait]
+pub trait UpstreamTrait {
+    async fn process_request<'a, 'b: 'a>(&self, request: Request<'a, 'b>, body: &'b [u8]) -> Result<ByteBuffer>;
+}
 
 pub struct Upstream {
     client: Client<HttpsConnector<HttpConnector>>,
@@ -14,32 +19,12 @@ pub struct Upstream {
 
 impl Upstream {
     pub fn new(uri: String) -> Result<Self> {
-        let https = HttpsConnector::new(4).expect("TLS initialization failed");
+        let https = HttpsConnector::new();
         let client = Client::builder().build::<_, hyper::Body>(https);
         // Check that uri is valid
-        uri.parse::<Uri>()?;
+        uri.parse::<Uri>()
+            .map_err(|_| ProxyError::ConfigurationError)?;
         Ok(Upstream { client, uri })
-    }
-
-    pub fn process_request<'a>(&self, request: Request, body: &'a [u8]) -> FutureResponse {
-        let outgoing = match self.build_upstream_request(request, body) {
-            Ok(outgoing) => outgoing,
-            Err(e) => return Box::new(err(e)),
-        };
-        let future = self
-            .client
-            .request(outgoing)
-            .and_then(|resp| {
-                // Once the request to the upstream server is complete
-                // convert the body into bytes to send as a response
-                resp.map(|body| body.concat2().map(|chunk| chunk.to_vec()))
-                    .into_body()
-            })
-            .map_err(|e| {
-                println!("Body parsing error: {}", e);
-                ProxyError::RequestFailure.into()
-            });
-        Box::new(future)
     }
 
     /// Builds a request to the upstream server based on the incoming request
@@ -51,7 +36,26 @@ impl Upstream {
         HyperRequest::builder()
             .method(method.as_bytes())
             .uri(uri)
-            .body(Body::from(body.to_vec()))
-            .map_err(|err| err.into())
+            .body(Body::from(Vec::from(body)))
+            .map_err(From::from)
+    }
+}
+
+#[async_trait]
+impl UpstreamTrait for Upstream {
+    async fn process_request<'a, 'b: 'a>(&self, request: Request<'a, 'b>, body: &'b [u8]) -> Result<ByteBuffer> {
+        let outgoing = self.build_upstream_request(request, body)?;
+        let mut resp = self
+            .client
+            .request(outgoing)
+            .await?;
+
+        let mut buf = ByteBuffer::new();
+
+        while let Some(next) = resp.data().await {
+            let chunk = next?;
+            buf.write_bytes(&chunk);
+        }
+        Ok(buf)
     }
 }

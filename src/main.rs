@@ -1,22 +1,20 @@
-#[macro_use]
-extern crate failure;
-#[macro_use]
-extern crate slog;
-
 use std::fs;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use failure::ResultExt;
-use slog::{Drain, Logger};
 use structopt::{self, StructOpt};
+
+#[macro_use]
+extern crate log;
 
 mod error;
 mod server;
 mod upstream;
 
-use error::{ErrorExt, Result};
+use error::ProxyError;
+
+const ALPN_QUIC_HTTP: &[&[u8]] = &[b"hq-24"];
 
 #[derive(StructOpt, Debug)]
 #[structopt(name = "server")]
@@ -27,7 +25,7 @@ struct Opt {
         short = "k",
         long = "key",
         requires = "cert",
-        default_value = "certs/key.der"
+        default_value = "certs/key.pem"
     )]
     key: PathBuf,
     /// TLS certificate
@@ -36,7 +34,7 @@ struct Opt {
         short = "c",
         long = "cert",
         requires = "key",
-        default_value = "certs/cert.der"
+        default_value = "certs/cert.pem"
     )]
     cert: PathBuf,
     /// Enable stateless retries
@@ -57,13 +55,8 @@ struct Opt {
 fn main() {
     let opt = Opt::from_args();
     let code = {
-        let decorator = slog_term::PlainSyncDecorator::new(std::io::stderr());
-        let drain = slog_term::FullFormat::new(decorator)
-            .use_original_order()
-            .build()
-            .fuse();
-        if let Err(e) = run(Logger::root(drain, o!()), opt) {
-            eprintln!("ERROR: {}", e.pretty());
+        if let Err(e) = run(opt) {
+            eprintln!("ERROR: {}", e);
             1
         } else {
             0
@@ -72,7 +65,8 @@ fn main() {
     ::std::process::exit(code);
 }
 
-fn run(log: Logger, options: Opt) -> Result<()> {
+fn run(options: Opt) -> Result<(), ProxyError> {
+    simple_logger::init().unwrap();
     let server_config = quinn::ServerConfig {
         transport: Arc::new(quinn::TransportConfig {
             stream_window_uni: 0,
@@ -81,7 +75,7 @@ fn run(log: Logger, options: Opt) -> Result<()> {
         ..Default::default()
     };
     let mut server_config = quinn::ServerConfigBuilder::new(server_config);
-    server_config.protocols(&[quinn::ALPN_QUIC_HTTP]);
+    server_config.protocols(&ALPN_QUIC_HTTP);
 
     if options.stateless_retry {
         server_config.use_stateless_retry(true);
@@ -90,22 +84,25 @@ fn run(log: Logger, options: Opt) -> Result<()> {
     let key_path = options.key;
     let cert_path = options.cert;
 
-    let key = fs::read(&key_path).context("failed to read private key")?;
+    let key = fs::read(&key_path)?;
     let key = if key_path.extension().map_or(false, |x| x == "der") {
-        quinn::PrivateKey::from_der(&key)?
+        quinn::PrivateKey::from_der(&key)
+            .map_err(|_| ProxyError::ConfigurationError)?
     } else {
-        quinn::PrivateKey::from_pem(&key)?
+        quinn::PrivateKey::from_pem(&key)
+            .map_err(|_| ProxyError::ConfigurationError)?
     };
-    let cert_chain = fs::read(&cert_path).context("failed to read certificate chain")?;
+    let cert_chain = fs::read(&cert_path)?;
     let cert_chain = if cert_path.extension().map_or(false, |x| x == "der") {
         quinn::CertificateChain::from_certs(quinn::Certificate::from_der(&cert_chain))
     } else {
-        quinn::CertificateChain::from_pem(&cert_chain)?
+        quinn::CertificateChain::from_pem(&cert_chain)
+            .map_err(|_| ProxyError::ConfigurationError)?
     };
-    server_config.certificate(cert_chain, key)?;
+    server_config.certificate(cert_chain, key)
+        .map_err(|_| ProxyError::ConfigurationError)?;
     server::serve(
         upstream::Upstream::new(options.upstream)?,
-        log.clone(),
         server_config.build(),
         options.listen,
     )
