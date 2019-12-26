@@ -81,7 +81,7 @@ fn handle_request(upstream: Rc<Upstream>, log: &Logger, stream: quinn::NewStream
     };
 
     tokio_current_thread::spawn(
-        recv.read_to_end(64 * 1024) // Read the request, which must be at most 64KiB
+        recv.read_to_end(256 * 1024 * 1024) // Read the request, which must be at most 256MB
             .map_err(|e| format_err!("failed reading request: {}", e))
             .and_then(move |(_, req)| {
                 info!(log, "got request"; "len" => req.len());
