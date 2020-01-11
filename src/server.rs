@@ -97,7 +97,7 @@ async fn handle_request(
     upstream: Arc<Upstream>,
     (mut send, recv): (quinn::SendStream, quinn::RecvStream),
 ) -> Result<()> {
-    let req = recv.read_to_end(64 * 1024).await?;
+    let req = recv.read_to_end(256 * 1024 * 1024).await?; // Read request, maximum size of 256 MB
     // Execute the request
     let mut headers = [httparse::EMPTY_HEADER; 16];
     let mut parsed = httparse::Request::new(&mut headers);
