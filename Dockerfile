@@ -1,4 +1,4 @@
-FROM rust:1.36
+FROM rust:1.40
 
 WORKDIR /usr/src/quinn-reverse-proxy
 COPY Cargo.* ./

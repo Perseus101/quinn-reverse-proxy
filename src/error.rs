@@ -1,37 +1,82 @@
-use failure::{Error, Fail};
-use std::fmt;
+use err_derive::Error;
 
-pub type Result<T> = std::result::Result<T, Error>;
+use std::io::Error as IoError;
+use http::Error as HttpError;
+use hyper::Error as HyperError;
+use quinn_proto::ConnectionError;
+use quinn::{ReadError, ReadToEndError, WriteError, EndpointError};
 
-pub struct PrettyErr<'a>(&'a dyn Fail);
-impl<'a> fmt::Display for PrettyErr<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.0, f)?;
-        let mut x: &dyn Fail = self.0;
-        while let Some(cause) = x.cause() {
-            f.write_str(": ")?;
-            fmt::Display::fmt(&cause, f)?;
-            x = cause;
-        }
-        Ok(())
-    }
-}
-
-pub trait ErrorExt {
-    fn pretty(&self) -> PrettyErr<'_>;
-}
-
-impl ErrorExt for Error {
-    fn pretty(&self) -> PrettyErr<'_> {
-        PrettyErr(self.as_fail())
-    }
-}
+pub type Result<T> = std::result::Result<T, ProxyError>;
 
 /// Proxy error
-#[derive(Debug, Fail)]
+#[derive(Debug, Error)]
 pub enum ProxyError {
-    #[fail(display = "Invalid request")]
+    #[error(display = "Invalid configuration")]
+    ConfigurationError,
+    #[error(display = "Invalid request")]
     InvalidRequest,
-    #[fail(display = "Failed to make request to upstream")]
-    RequestFailure,
+    #[error(display = "IO Error {}", _0)]
+    IoError(IoError),
+    #[error(display = "Http Error {}", _0)]
+    HttpError(HttpError),
+    #[error(display = "Hyper Error {}", _0)]
+    HyperError(HyperError),
+    #[error(display = "Read Error {}", _0)]
+    ReadError(ReadError),
+    #[error(display = "ReadToEnd Error {}", _0)]
+    ReadToEndError(ReadToEndError),
+    #[error(display = "Write Error {}", _0)]
+    WriteError(WriteError),
+    #[error(display = "Endpoint Error {}", _0)]
+    EndpointError(EndpointError),
+    #[error(display = "Connection Error {}", _0)]
+    ConnectionError(ConnectionError),
+}
+
+impl From<IoError> for ProxyError {
+    fn from(err: IoError) -> Self {
+        ProxyError::IoError(err)
+    }
+}
+
+impl From<HttpError> for ProxyError {
+    fn from(err: HttpError) -> Self {
+        ProxyError::HttpError(err)
+    }
+}
+
+impl From<HyperError> for ProxyError {
+    fn from(err: HyperError) -> Self {
+        ProxyError::HyperError(err)
+    }
+}
+
+impl From<ReadError> for ProxyError {
+    fn from(err: ReadError) -> Self {
+        ProxyError::ReadError(err)
+    }
+}
+
+impl From<ReadToEndError> for ProxyError {
+    fn from(err: ReadToEndError) -> Self {
+        ProxyError::ReadToEndError(err)
+    }
+}
+
+impl From<WriteError> for ProxyError {
+    fn from(err: WriteError) -> Self {
+        ProxyError::WriteError(err)
+    }
+}
+
+impl From<EndpointError> for ProxyError {
+    fn from(err: EndpointError) -> Self {
+        ProxyError::EndpointError(err)
+    }
+}
+
+impl From<ConnectionError> for ProxyError {
+    fn from(err: ConnectionError) -> Self {
+        ProxyError::ConnectionError(err)
+    }
 }
