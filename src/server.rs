@@ -71,8 +71,8 @@ async fn handle_connection(upstream: Arc<Upstream>, conn: quinn::Connecting) -> 
         // Each stream initiated by the client constitutes a new request.
         while let Some(stream) = bi_streams.next().await {
             let stream = match stream {
-                Err(quinn::ConnectionError::ApplicationClosed { .. }) => {
-                    info!("connection closed");
+                Err(quinn::ConnectionError::ApplicationClosed { reason }) => {
+                    info!("connection closed: {}", reason);
                     return Ok(());
                 }
                 Err(e) => {
@@ -97,7 +97,7 @@ async fn handle_request(
     upstream: Arc<Upstream>,
     (mut send, recv): (quinn::SendStream, quinn::RecvStream),
 ) -> Result<()> {
-    let req = recv.read_to_end(256 * 1024 * 1024).await?; // Read request, maximum size of 256 MB
+    let req = recv.read_to_end(1024 * 1024 * 1024).await?; // Read request, maximum size of 1GB
     // Execute the request
     let mut headers = [httparse::EMPTY_HEADER; 16];
     let mut parsed = httparse::Request::new(&mut headers);

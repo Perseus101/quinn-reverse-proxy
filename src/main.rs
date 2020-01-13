@@ -66,7 +66,7 @@ fn main() {
 }
 
 fn run(options: Opt) -> Result<(), ProxyError> {
-    simple_logger::init().unwrap();
+    simple_logger::init_with_level(log::Level::Info).unwrap();
     let server_config = quinn::ServerConfig {
         transport: Arc::new(quinn::TransportConfig {
             stream_window_uni: 0,

@@ -33,9 +33,17 @@ impl Upstream {
         let uri = format!("{}{}", self.uri, path);
         let method = String::from(request.method.ok_or(ProxyError::InvalidRequest)?);
 
-        HyperRequest::builder()
+        let mut builder = HyperRequest::builder()
             .method(method.as_bytes())
-            .uri(uri)
+            .uri(uri);
+
+        for header in request.headers {
+            if header.name == "Content-Type" {
+                builder = builder.header(header.name, header.value);
+            }
+        }
+
+        builder
             .body(Body::from(Vec::from(body)))
             .map_err(From::from)
     }
