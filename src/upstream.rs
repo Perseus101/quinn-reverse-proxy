@@ -1,15 +1,19 @@
+use async_trait::async_trait;
+use bytebuffer::ByteBuffer;
 use httparse::Request;
 use hyper::client::connect::HttpConnector;
 use hyper::{body::HttpBody as _, Body, Client, Request as HyperRequest, Uri};
 use hyper_tls::HttpsConnector;
-use bytebuffer::ByteBuffer;
-use async_trait::async_trait;
 
 use crate::error::{ProxyError, Result};
 
 #[async_trait]
 pub trait UpstreamTrait {
-    async fn process_request<'a, 'b: 'a>(&self, request: Request<'a, 'b>, body: &'b [u8]) -> Result<ByteBuffer>;
+    async fn process_request<'a, 'b: 'a>(
+        &self,
+        request: Request<'a, 'b>,
+        body: &'b [u8],
+    ) -> Result<ByteBuffer>;
 }
 
 pub struct Upstream {
@@ -28,15 +32,16 @@ impl Upstream {
     }
 
     /// Builds a request to the upstream server based on the incoming request
-    fn build_upstream_request<'a>(&self, request: Request, body: &'a [u8]) -> Result<HyperRequest<hyper::Body>> {
+    fn build_upstream_request<'a>(
+        &self,
+        request: Request,
+        body: &'a [u8],
+    ) -> Result<HyperRequest<hyper::Body>> {
         let path = request.path.ok_or(ProxyError::InvalidRequest)?;
         let uri = format!("{}{}", self.uri, path);
+
         let method = String::from(request.method.ok_or(ProxyError::InvalidRequest)?);
-
-        let mut builder = HyperRequest::builder()
-            .method(method.as_bytes())
-            .uri(uri);
-
+        let mut builder = HyperRequest::builder().method(method.as_bytes()).uri(uri);
         for header in request.headers {
             if header.name == "Content-Type" {
                 builder = builder.header(header.name, header.value);
@@ -51,12 +56,13 @@ impl Upstream {
 
 #[async_trait]
 impl UpstreamTrait for Upstream {
-    async fn process_request<'a, 'b: 'a>(&self, request: Request<'a, 'b>, body: &'b [u8]) -> Result<ByteBuffer> {
+    async fn process_request<'a, 'b: 'a>(
+        &self,
+        request: Request<'a, 'b>,
+        body: &'b [u8],
+    ) -> Result<ByteBuffer> {
         let outgoing = self.build_upstream_request(request, body)?;
-        let mut resp = self
-            .client
-            .request(outgoing)
-            .await?;
+        let mut resp = self.client.request(outgoing).await?;
 
         let mut buf = ByteBuffer::new();
 

@@ -5,8 +5,7 @@ use std::sync::Arc;
 
 use structopt::{self, StructOpt};
 
-#[macro_use]
-extern crate log;
+use anyhow::Result;
 
 mod error;
 mod server;
@@ -50,10 +49,26 @@ struct Opt {
         default_value = "http://localhost:5000"
     )]
     upstream: String,
+
+    /// Logging verbosity
+    #[structopt(short, parse(from_occurrences))]
+    verbosity: u64,
 }
 
 fn main() {
     let opt = Opt::from_args();
+    let level = match opt.verbosity {
+        0 => tracing::Level::WARN,
+        1 => tracing::Level::INFO,
+        2 => tracing::Level::DEBUG,
+        _ => tracing::Level::TRACE,
+    };
+    tracing::subscriber::set_global_default(
+        tracing_subscriber::FmtSubscriber::builder()
+            .with_max_level(level)
+            .finish(),
+    )
+    .expect("tracing failed to set global default");
     let code = {
         if let Err(e) = run(opt) {
             eprintln!("ERROR: {}", e);
@@ -65,8 +80,7 @@ fn main() {
     ::std::process::exit(code);
 }
 
-fn run(options: Opt) -> Result<(), ProxyError> {
-    simple_logger::init_with_level(log::Level::Info).unwrap();
+fn run(options: Opt) -> Result<()> {
     let server_config = quinn::ServerConfig {
         transport: Arc::new(quinn::TransportConfig {
             stream_window_uni: 0,
@@ -75,7 +89,7 @@ fn run(options: Opt) -> Result<(), ProxyError> {
         ..Default::default()
     };
     let mut server_config = quinn::ServerConfigBuilder::new(server_config);
-    server_config.protocols(&ALPN_QUIC_HTTP);
+    server_config.protocols(ALPN_QUIC_HTTP);
 
     if options.stateless_retry {
         server_config.use_stateless_retry(true);
@@ -86,11 +100,9 @@ fn run(options: Opt) -> Result<(), ProxyError> {
 
     let key = fs::read(&key_path)?;
     let key = if key_path.extension().map_or(false, |x| x == "der") {
-        quinn::PrivateKey::from_der(&key)
-            .map_err(|_| ProxyError::ConfigurationError)?
+        quinn::PrivateKey::from_der(&key).map_err(|_| ProxyError::ConfigurationError)?
     } else {
-        quinn::PrivateKey::from_pem(&key)
-            .map_err(|_| ProxyError::ConfigurationError)?
+        quinn::PrivateKey::from_pem(&key).map_err(|_| ProxyError::ConfigurationError)?
     };
     let cert_chain = fs::read(&cert_path)?;
     let cert_chain = if cert_path.extension().map_or(false, |x| x == "der") {
@@ -99,11 +111,14 @@ fn run(options: Opt) -> Result<(), ProxyError> {
         quinn::CertificateChain::from_pem(&cert_chain)
             .map_err(|_| ProxyError::ConfigurationError)?
     };
-    server_config.certificate(cert_chain, key)
+    server_config
+        .certificate(cert_chain, key)
         .map_err(|_| ProxyError::ConfigurationError)?;
+
     server::serve(
         upstream::Upstream::new(options.upstream)?,
         server_config.build(),
         options.listen,
-    )
+    )?;
+    Ok(())
 }
